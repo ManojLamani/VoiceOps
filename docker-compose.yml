@@ -1,0 +1,70 @@
+# VoiceOps: PostgreSQL + FastAPI backend + React frontend (+ optional local LLM via Ollama).
+#   docker compose up --build                      -> http://localhost:3000
+#     Works out of the box: with no LLM configured the agent runs its offline policy agent.
+#   Local LLM (free):
+#     1. in .env set  LLM_BASE_URL=http://ollama:11434/v1  and  LLM_MODEL=qwen2.5:3b
+#     2. docker compose --profile local-llm up --build
+#     3. docker compose exec ollama ollama pull qwen2.5:3b   (once)
+#   Hosted LLM: set LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in .env (see .env.example).
+# Set JWT_SECRET in .env; without it a random per-start secret is used (sessions reset on restart).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: voiceops
+      POSTGRES_PASSWORD: voiceops
+      POSTGRES_DB: voiceops
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voiceops"]
+      interval: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://voiceops:voiceops@postgres:5432/voiceops
+      APP_ENV: ${APP_ENV:-production}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:3b}
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - models:/models   # Hugging Face cache: embeddings + local Whisper
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "3000:80"
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local-llm"]
+    environment:
+      OLLAMA_KEEP_ALIVE: 60m
+      OLLAMA_CONTEXT_LENGTH: 8192
+    volumes:
+      - ollama:/root/.ollama
+    ports:
+      - "11434:11434"
+
+volumes:
+  pgdata:
+  models:
+  ollama:
