@@ -88,6 +88,11 @@ class ApiService {
   sendMessage(id, content) { return this.post(`/conversations/${id}/messages`, { content }); }
   endConversation(id) { return this.post(`/conversations/${id}/end`); }
 
+  // Live human handoff (staff)
+  joinConversation(id) { return this.post(`/conversations/${id}/handoff/join`); }
+  sendHandoffMessage(id, content) { return this.post(`/conversations/${id}/handoff/messages`, { content }); }
+  leaveConversation(id) { return this.post(`/conversations/${id}/handoff/leave`); }
+
   // Voice (REST fallback when the WebSocket is unavailable)
   voiceRespond(conversationId, { text, audio } = {}) {
     const form = new FormData();
