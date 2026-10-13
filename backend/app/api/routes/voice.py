@@ -9,6 +9,8 @@ WebSocket protocol (/api/voice/ws/{conversation_id}):
             KNOWLEDGE_RETRIEVED, TOOL_CALL_STARTED, TOOL_CALL_COMPLETED, CONFIRMATION_REQUIRED,
             GENERATING_RESPONSE, ESCALATED, AGENT_RESPONSE, SPEAKING (audio), TTS_UNAVAILABLE,
             COMPLETED (end of turn, carries status), CONVERSATION_ENDED, ERROR
+  live handoff (any time): HUMAN_JOINED, HUMAN_MESSAGE (followed by SPEAKING or TTS_UNAVAILABLE), HUMAN_LEFT.
+            While a human is handling the conversation, a customer turn ends with COMPLETED status "with_human".
 """
 import asyncio
 import base64
@@ -29,6 +31,7 @@ from app.core.security import get_current_user, decode_access_token
 from app.db.database import get_db, async_session_factory
 from app.db.models import User, Conversation
 from app.schemas.schemas import MAX_MESSAGE_CHARS
+from app.services import live_events
 from app.services.agent_service import CustomerSupportAgent, ConversationNotFound, ConversationClosed
 from app.services.voice_service import get_stt_provider, get_tts_provider, synthesize_safe, VoiceError
 
@@ -103,7 +106,7 @@ async def voice_respond(conversation_id: UUID = Form(...),
 
     result = await CustomerSupportAgent(db).process_message(conversation_id, transcript)
     t = time.perf_counter()
-    speech = await synthesize_safe(result["content"])
+    speech = await synthesize_safe(result["content"]) if result["content"] else None
     result.update({
         "transcript": transcript,
         "audio_base64": base64.b64encode(speech["audio"]).decode() if speech else None,
@@ -117,7 +120,8 @@ async def voice_respond(conversation_id: UUID = Form(...),
 
 # ── WebSocket voice session ──
 
-async def _authenticate(ws: WebSocket) -> Optional[dict]:
+async def authenticate_websocket(ws: WebSocket) -> Optional[dict]:
+    """Read the first message, which must be {"type": "auth", "token": ...}. Returns the user or None."""
     try:
         msg = json.loads(await asyncio.wait_for(ws.receive_text(), timeout=10))
         if msg.get("type") != "auth":
@@ -125,7 +129,7 @@ async def _authenticate(ws: WebSocket) -> Optional[dict]:
         payload = decode_access_token(msg.get("token", ""))
         async with async_session_factory() as session:
             user = await session.get(User, UUID(payload["sub"]))
-        return {"user_id": str(user.id), "email": user.email, "role": user.role} \
+        return {"user_id": str(user.id), "email": user.email, "role": user.role, "full_name": user.full_name} \
             if user and user.is_active else None
     except Exception:
         return None
@@ -156,7 +160,7 @@ async def voice_websocket(ws: WebSocket, conversation_id: str):
         await ws.send_json({"type": "ERROR", "data": {"error": "Invalid conversation id", "fatal": True}})
         await ws.close(code=4400)
         return
-    user = await _authenticate(ws)
+    user = await authenticate_websocket(ws)
     if not user:
         await ws.send_json({"type": "AUTH_FAILED", "data": {"error": "Invalid or expired token"}})
         await ws.close(code=4401)
@@ -172,14 +176,42 @@ async def voice_websocket(ws: WebSocket, conversation_id: str):
     key = str(conv_id)
     _connections[key] = _connections.get(key, 0) + 1
     stt, tts = get_stt_provider(), get_tts_provider()
+    send_lock = asyncio.Lock()  # turn events and live handoff events are sent from two tasks
 
     async def send(event: str, data: dict = None):
         payload = data or {}
         if event != "SPEAKING":  # every event carrying agent/tool data is masked for viewers
             payload = for_user(user, payload)
-        await ws.send_json({"type": event, "data": payload})
+        async with send_lock:
+            await ws.send_json({"type": event, "data": payload})
 
-    await send("READY", {"stt": stt.name if stt else "browser", "tts": tts.name if tts else "browser"})
+    async def speak(text: str, message_id: str):
+        speech = await synthesize_safe(text)
+        if speech:
+            await send("SPEAKING", {"audio": base64.b64encode(speech["audio"]).decode(), "mime": speech["mime"],
+                                    "message_id": message_id})
+        else:
+            await send("TTS_UNAVAILABLE", {"text": text, "fallback": "browser"})
+        return speech
+
+    async def forward_handoff(queue: asyncio.Queue):
+        """Deliver what a human agent says (and their joining/leaving) to the customer, spoken with TTS."""
+        try:
+            while True:
+                event, data = await queue.get()
+                if event in ("HUMAN_JOINED", "HUMAN_LEFT"):
+                    await send(event, data)
+                elif event == "MESSAGE" and data.get("author_name"):
+                    await send("HUMAN_MESSAGE", data)
+                    await speak(data["content"], data["id"])
+        except Exception as e:  # socket gone; the receive loop cleans up
+            logger.info("handoff_forward_stopped", error=str(e))
+
+    human = ((conv.metadata_ or {}).get("state") or {}).get("human_agent")
+    await send("READY", {"stt": stt.name if stt else "browser", "tts": tts.name if tts else "browser",
+                         "human_agent": {"name": human["name"]} if human else None})
+    live_queue = live_events.subscribe(conv_id)
+    forwarder = asyncio.create_task(forward_handoff(live_queue))
     ended = False
 
     async def run_turn(user_text: str, stt_ms: Optional[float] = None):
@@ -198,14 +230,14 @@ async def voice_websocket(ws: WebSocket, conversation_id: str):
                 await send("ERROR", {"error": "Something went wrong while handling that. Please try again.",
                                      "retry": True})
                 return
+        if result["status"] == "with_human":  # the human agent replies on their own time (HUMAN_MESSAGE)
+            await send("COMPLETED", {"status": "with_human", "timings": {
+                "stt_ms": stt_ms, "agent_ms": None, "tts_ms": None,
+                "total_ms": round((time.perf_counter() - started) * 1000 + (stt_ms or 0), 1)}})
+            return
         await send("AGENT_RESPONSE", result)
         t = time.perf_counter()
-        speech = await synthesize_safe(result["content"])
-        if speech:
-            await send("SPEAKING", {"audio": base64.b64encode(speech["audio"]).decode(), "mime": speech["mime"],
-                                    "message_id": result["message_id"]})
-        else:
-            await send("TTS_UNAVAILABLE", {"text": result["content"], "fallback": "browser"})
+        speech = await speak(result["content"], result["message_id"])
         await send("COMPLETED", {
             "status": result["status"],
             "timings": {"stt_ms": stt_ms, "agent_ms": result["processing_time_ms"],
@@ -276,6 +308,8 @@ async def voice_websocket(ws: WebSocket, conversation_id: str):
     except WebSocketDisconnect:
         logger.info("ws_disconnected", conversation_id=key)
     finally:
+        forwarder.cancel()
+        live_events.unsubscribe(conv_id, live_queue)
         _connections[key] = max(0, _connections.get(key, 1) - 1)
         if not ended:
             task = asyncio.create_task(_auto_end(conv_id))
