@@ -13,6 +13,7 @@ VoiceOps lets customers talk to a support agent in the browser. The agent transc
 - Order status, delivery estimates, cancellations and return requests
 - Confirmation required before cancelling orders, creating returns or updating customer details
 - Escalation to a human with an automatically created support ticket
+- Live human handoff: staff join an active conversation from the dashboard, talk to the customer (replies are spoken with TTS), and hand back to the AI
 - Offline fallback when no LLM is configured
 - Dashboard for conversations, customers, orders, tickets, knowledge base and analytics
 - JWT authentication; self-registered users get read-only access with masked customer data
@@ -107,6 +108,7 @@ pytest
 2. Open **Voice Agent** and start a conversation.
 3. Ask things like "What's the status of order ORD001?" or "How long do refunds take?"
 4. Review the conversation, tool calls and metrics under **Conversations** and **Analytics**.
+5. To try a live handoff, keep the call open and open the same conversation under **Conversations** in a second tab. Click **Join conversation**, type a reply (the caller hears it), then click **Hand back to Ava**.
 
 ## API
 
@@ -118,6 +120,10 @@ All endpoints are under `/api`. Interactive docs are available at http://localho
 | POST | `/api/conversations` | Start a conversation |
 | POST | `/api/conversations/{id}/messages` | Send a text message to the agent |
 | WS | `/api/voice/ws/{conversation_id}` | Real-time voice conversation |
+| POST | `/api/conversations/{id}/handoff/join` | Take over a conversation from the AI (staff) |
+| POST | `/api/conversations/{id}/handoff/messages` | Reply to the customer as the human agent |
+| POST | `/api/conversations/{id}/handoff/leave` | Hand the conversation back to the AI |
+| WS | `/api/conversations/{id}/live` | Live events for one conversation (dashboard) |
 | POST | `/api/voice/transcribe` | Speech to text |
 | POST | `/api/voice/synthesize` | Text to speech |
 | GET | `/api/orders` | List orders |
