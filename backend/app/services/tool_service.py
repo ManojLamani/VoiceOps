@@ -415,6 +415,12 @@ class ToolExecutor:
 
     async def _tool_escalate_to_human(self, ctx: ToolContext, reason: str, details: str = None) -> Dict:
         existing = await self.escalations.get_by_conversation(ctx.conversation_id)
+        if existing and existing.status == "resolved":
+            # A human already handled it and handed back, and the customer needs one again: back to the queue.
+            existing.status, existing.assigned_to, existing.resolved_at = "pending", None, None
+            return {"status": "escalated", "reason": _val(existing.reason), "ticket_id": existing.ticket_id,
+                    "expected_response": ESCALATION_PRIORITY[existing.reason][1], "reopened": True,
+                    "_escalation": True}
         if existing:
             return {"status": "escalated", "already_escalated": True, "ticket_id": existing.ticket_id,
                     "reason": _val(existing.reason)}
