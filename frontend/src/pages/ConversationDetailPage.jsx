@@ -2,8 +2,10 @@ import { useParams, Link } from 'react-router-dom';
 import api from '../api/api';
 import Icon from '../components/Icon';
 import EscalationActions from '../components/EscalationActions';
+import HandoffPanel from '../components/HandoffPanel';
 import { Badge, Spinner, ErrorBanner } from '../components/ui';
 import useAsync from '../lib/useAsync';
+import useLiveConversation from '../lib/useLiveConversation';
 import { label, dateTime, time, duration, ms, TOOL_LABELS } from '../lib/format';
 
 function Field({ name, children }) {
@@ -12,7 +14,9 @@ function Field({ name, children }) {
 
 export default function ConversationDetailPage() {
   const { id } = useParams();
-  const { data, loading, error, reload } = useAsync(() => api.getConversation(id), [id]);
+  const { data, loading, error, reload, refresh } = useAsync(() => api.getConversation(id), [id]);
+  const live = !!data && !data.conversation.ended_at;
+  useLiveConversation(id, live, refresh); // every live event (message, join, hand back, end) re-syncs the page
 
   if (loading) return <Spinner />;
   if (error) return <ErrorBanner error={error} onRetry={reload} />;
@@ -28,7 +32,10 @@ export default function ConversationDetailPage() {
           <h1>{c.customer_name ? `${c.customer_name} · ${c.customer_code}` : 'Unverified caller'}</h1>
           <p>{dateTime(c.started_at)} · {c.channel} · {c.message_count} messages · {duration(c.duration_seconds)}</p>
         </div>
-        <div className="page-actions"><Badge value={c.status} />{c.resolution && <Badge value={c.resolution} />}</div>
+        <div className="page-actions">
+          {live && <span className="conn conn-open"><span className="conn-dot" />Live</span>}
+          <Badge value={c.status} />{c.resolution && <Badge value={c.resolution} />}
+        </div>
       </div>
 
       {esc && (
@@ -42,6 +49,8 @@ export default function ConversationDetailPage() {
           </div>
         </div>
       )}
+
+      {live && <HandoffPanel conversationId={c.id} humanAgent={state.human_agent} onChange={refresh} />}
 
       <div className="detail-grid-2">
         <div className="card">
@@ -90,12 +99,14 @@ export default function ConversationDetailPage() {
       <div className="card">
         <h3 className="card-title">Transcript</h3>
         <ol className="transcript-log">
-          {messages.map((m) => (
-            <li key={m.id} className={`turn turn-${m.role}`}>
-              <div className="turn-avatar">{m.role === 'user' ? <Icon name="user" size={14} /> : <Icon name="mic" size={14} />}</div>
+          {messages.map((m) => (m.role === 'system' ? (
+            <li key={m.id} className="turn-system"><span>{m.content}</span><span className="muted">{time(m.created_at)}</span></li>
+          ) : (
+            <li key={m.id} className={`turn turn-${m.role}${m.author_name ? ' turn-human' : ''}`}>
+              <div className="turn-avatar"><Icon name={m.role === 'user' || m.author_name ? 'user' : 'mic'} size={14} /></div>
               <div className="turn-body">
                 <div className="turn-head">
-                  <strong>{m.role === 'user' ? 'Customer' : 'AI agent'}</strong>
+                  <strong>{m.role === 'user' ? 'Customer' : m.author_name ? `${m.author_name} · Support agent` : 'AI agent'}</strong>
                   <span className="muted">{time(m.created_at)}</span>
                   {m.role === 'user' && m.intent && <span className="chip chip-muted">{label(m.intent)}{m.confidence ? ` · ${Math.round(m.confidence * 100)}%` : ''}</span>}
                   {m.processing_time_ms && <span className="muted small">{ms(m.processing_time_ms)}</span>}
@@ -113,7 +124,7 @@ export default function ConversationDetailPage() {
                 )}
               </div>
             </li>
-          ))}
+          )))}
         </ol>
       </div>
     </div>
