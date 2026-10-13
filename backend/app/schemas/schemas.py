@@ -156,6 +156,8 @@ class MessageResponse(BaseModel):
     rag_sources: Optional[List[Dict[str, Any]]] = None
     tool_calls: Optional[List[Dict[str, Any]]] = None
     processing_time_ms: Optional[float] = None
+    author_id: Optional[UUID] = None  # staff member who wrote it (live handoff); None for the AI and the customer
+    author_name: Optional[str] = None
     created_at: datetime
 
     class Config:
