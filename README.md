@@ -31,6 +31,7 @@ backend/
   app/api/routes/       REST and WebSocket endpoints
   app/services/         Agent, LLM, RAG, voice and tool logic
   app/db/               Database models and seed data
+  migrations/           Alembic database migrations
   scripts/seed.py       Reset the database to demo data
   tests/                Test suite
 frontend/
@@ -80,7 +81,17 @@ npm install
 npm run dev
 ```
 
-The app runs at http://localhost:5173. Tables are created and demo data is seeded on first start.
+The app runs at http://localhost:5173. Database migrations run and demo data is seeded on first start.
+
+### Database migrations
+
+The schema is managed with Alembic, and the backend applies pending migrations on every start. After changing `backend/app/db/models.py`, create a migration from `backend/`:
+
+```bash
+alembic revision --autogenerate -m "describe the change"
+```
+
+Review the generated file in `backend/migrations/versions/` and commit it with the model change. The test suite fails if the models and migrations get out of sync.
 
 ### Tests
 
