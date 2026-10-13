@@ -1,7 +1,12 @@
 """Async database engine and session management."""
+import os
+
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from app.core.config import get_settings
+from app.core.config import get_settings, BACKEND_DIR
+
+BASELINE_REVISION = "0001"  # schema the app created with create_all before migrations existed
 
 
 class Base(DeclarativeBase):
@@ -33,11 +38,35 @@ async def get_db():
             raise
 
 
-async def init_db():
-    """Create all tables (idempotent)."""
+def alembic_config(connection=None):
+    from alembic.config import Config
+    config = Config(os.path.join(BACKEND_DIR, "alembic.ini"))
+    config.attributes["connection"] = connection
+    return config
+
+
+def _upgrade(connection):
+    from alembic import command
+    config = alembic_config(connection)
+    tables = set(inspect(connection).get_table_names())
+    if "users" in tables and "alembic_version" not in tables:
+        # Created by create_all before migrations existed: record it as the baseline instead of recreating it.
+        command.stamp(config, BASELINE_REVISION)
+    command.upgrade(config, "head")
+
+
+def _drop_all(connection):
     from app.db import models  # noqa: F401  (register models on Base.metadata)
+    Base.metadata.drop_all(connection)
+    connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+
+
+async def init_db(reset: bool = False):
+    """Bring the schema up to date by applying migrations. With reset=True all tables are dropped first."""
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        if reset:
+            await conn.run_sync(_drop_all)
+        await conn.run_sync(_upgrade)
 
 
 async def close_db():
