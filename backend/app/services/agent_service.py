@@ -24,6 +24,7 @@ from app.db.repositories import (
     ConversationRepository, MessageRepository, ToolExecutionRepository, EscalationRepository,
     CustomerRepository, OrderRepository,
 )
+from app.services.live_events import publish_after_commit, message_event
 from app.services.llm_service import get_llm_provider, LLMError
 from app.services.nlu import get_intent_classifier, sentiment_of, TOOL_INTENTS, KNOWLEDGE_INTENTS
 from app.services.offline_agent import OfflinePolicy
@@ -170,6 +171,8 @@ class CustomerSupportAgent:
         state["turns"] += 1
         customer = await self._customer_from_state(state, conversation)
         text = user_text.strip()
+        if state.get("human_agent"):
+            return await self._relay_to_human(conversation, state, customer, text, started)
 
         # 1. Understand: semantic intent + entities (memory of the order being discussed)
         intent, confidence, all_intents = get_intent_classifier().classify_detailed(text)
@@ -270,6 +273,8 @@ class CustomerSupportAgent:
 
         await self._save_state(conversation, state, ctx)
         await self.db.flush()
+        for m in (user_msg, assistant_msg):
+            publish_after_commit(self.db, conversation_id, "MESSAGE", message_event(m))
 
         return {
             "message_id": str(assistant_msg.id),
@@ -284,9 +289,25 @@ class CustomerSupportAgent:
             "customer": self._customer_payload(ctx.customer),
             "active_order_id": state.get("active_order_id"),
             "escalated": bool(state.get("escalated")),
+            "human_agent": None,
             "provider": "offline" if (turn["degraded"] or not self.llm) else self.provider_name,
             "degraded": turn["degraded"],
             "processing_time_ms": elapsed_ms,
+        }
+
+    async def _relay_to_human(self, conversation, state, customer, text, started) -> Dict[str, Any]:
+        """A staff member has taken over (live handoff): store the customer's message for them and stay silent."""
+        user_msg = await self.messages.create(conversation_id=conversation.id, role=MessageRole.USER, content=text)
+        conversation.metadata_ = {**(conversation.metadata_ or {}), "state": state}
+        await self.db.flush()
+        publish_after_commit(self.db, conversation.id, "MESSAGE", message_event(user_msg))
+        return {
+            "message_id": None, "user_message_id": str(user_msg.id), "content": "", "intent": None,
+            "confidence": None, "tool_calls": [], "rag_sources": [], "status": "with_human", "pending_action": None,
+            "customer": self._customer_payload(customer), "active_order_id": state.get("active_order_id"),
+            "escalated": bool(state.get("escalated")), "human_agent": {"name": state["human_agent"]["name"]},
+            "provider": "human", "degraded": False,
+            "processing_time_ms": round((time.perf_counter() - started) * 1000, 2),
         }
 
     # ── Confirmation gate ──
@@ -603,7 +624,9 @@ class CustomerSupportAgent:
         if escalation:
             escalation.conversation_summary = details["summary"]
         await self.db.flush()
-        return self._summary_payload(conversation)
+        summary = self._summary_payload(conversation)
+        publish_after_commit(self.db, conversation_id, "CONVERSATION_ENDED", summary)
+        return summary
 
     def _deterministic_summary(self, user_msgs, intent, outcome, actions, executions, escalation) -> Dict:
         issue = user_msgs[0].content[:200] if user_msgs else "No customer input."
