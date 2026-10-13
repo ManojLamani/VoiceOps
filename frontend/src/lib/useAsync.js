@@ -11,6 +11,8 @@ export default function useAsync(loader, deps = []) {
       .then((data) => setState({ data, loading: false, error: null }))
       .catch((e) => setState({ data: null, loading: false, error: e.message }));
   }, [run]);
+  // Re-fetch in the background: keeps showing the current data, and keeps it if the request fails.
+  const refresh = useCallback(() => run().then((data) => setState({ data, loading: false, error: null }), () => {}), [run]);
   useEffect(() => {
     let live = true;
     run()
@@ -18,5 +20,5 @@ export default function useAsync(loader, deps = []) {
       .catch((e) => live && setState({ data: null, loading: false, error: e.message }));
     return () => { live = false; };
   }, [run]);
-  return { ...state, reload };
+  return { ...state, reload, refresh };
 }
