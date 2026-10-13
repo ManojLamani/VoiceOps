@@ -11,7 +11,7 @@ from sqlalchemy import select, func
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.security import hash_password
-from app.db.database import engine, async_session_factory, Base
+from app.db.database import async_session_factory, init_db
 from app.db.models import (
     User, Customer, Order, Ticket, KnowledgeDocument, OrderStatus, TicketStatus, TicketPriority, AccountStatus,
 )
@@ -104,10 +104,7 @@ async def sync_knowledge_documents(session) -> int:
 
 async def seed_database(reset: bool = False) -> bool:
     """Seed demo data. With reset=True all tables are dropped first. Returns True if data was seeded."""
-    async with engine.begin() as conn:
-        if reset:
-            await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+    await init_db(reset=reset)
 
     async with async_session_factory() as session:
         if (await session.execute(select(func.count(User.id)))).scalar():
