@@ -88,7 +88,8 @@ async def get_conversation(conversation_id: UUID, current_user: dict = Depends(g
         escalation=escalation_response(escalation) if escalation else None,
         state={"active_order_id": state.get("active_order_id"),
                "pending_action": (state.get("pending_action") or {}).get("summary"),
-               "failed_turns": state.get("failed_turns", 0), "intents": state.get("intents", [])},
+               "failed_turns": state.get("failed_turns", 0), "intents": state.get("intents", []),
+               "human_agent": state.get("human_agent")},
     ))
 
 
