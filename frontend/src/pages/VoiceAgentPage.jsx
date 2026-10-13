@@ -30,10 +30,12 @@ function Transcript({ messages, state }) {
   useEffect(() => { end.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [messages, state]);
   return (
     <div className="transcript" aria-live="polite">
-      {messages.map((m) => (
-        <div key={m.id} className={`bubble bubble-${m.role}`}>
+      {messages.map((m) => (m.role === 'system' ? (
+        <div key={m.id} className="bubble-system" role="status">{m.content}</div>
+      ) : (
+        <div key={m.id} className={`bubble bubble-${m.role}${m.author ? ' bubble-human' : ''}`}>
           <div className="bubble-head">
-            <span>{m.role === 'user' ? 'Customer' : 'Ava · AI agent'}</span>
+            <span>{m.role === 'user' ? 'Customer' : m.author ? `${m.author} · Support agent` : 'Ava · AI agent'}</span>
             <span>{m.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
             {m.source === 'typed' && <span className="chip chip-muted">typed</span>}
           </div>
@@ -51,7 +53,7 @@ function Transcript({ messages, state }) {
             </div>
           )}
         </div>
-      ))}
+      )))}
       {BUSY_STATES.has(state) && (
         <div className="bubble bubble-assistant bubble-typing"><span /><span /><span /></div>
       )}
@@ -173,7 +175,9 @@ export default function VoiceAgentPage() {
                     {v.state === 'speaking' && (v.prefs.bargeIn && v.prefs.handsFree ? 'You can interrupt at any time.' : '')}
                     {v.state === 'ready' && (pushToTalk ? 'Press the mic to talk.' : 'Microphone is paused.')}
                   </div>
-                  {s.escalated && <div className="escalation-pill"><Icon name="alert" size={13} /> Escalated to a human agent</div>}
+                  {s.human ? (
+                    <div className="human-pill"><Icon name="user" size={13} /> {s.human.name} from support is on the line</div>
+                  ) : s.escalated && <div className="escalation-pill"><Icon name="alert" size={13} /> Escalated to a human agent</div>}
                 </div>
                 <div className="stage-controls">
                   <button
@@ -251,7 +255,7 @@ export default function VoiceAgentPage() {
                 ) : <span className="muted">—</span>}
               </dd>
               <dt>Status</dt>
-              <dd>{s.escalated ? <Badge value="escalated" /> : s.pending ? <Badge value="pending">Awaiting confirmation</Badge> : v.active ? <Badge value="active" /> : <span className="muted">—</span>}</dd>
+              <dd>{s.human ? <Badge value="assigned">With {s.human.name}</Badge> : s.escalated ? <Badge value="escalated" /> : s.pending ? <Badge value="pending">Awaiting confirmation</Badge> : v.active ? <Badge value="active" /> : <span className="muted">—</span>}</dd>
               <dt>Engine</dt>
               <dd className="small">{s.provider || '—'}{v.capabilities && <span className="muted"> · STT {v.capabilities.stt} · TTS {v.capabilities.tts}</span>}</dd>
             </dl>
