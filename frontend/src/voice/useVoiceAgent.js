@@ -33,7 +33,7 @@ export function savePrefs(prefs) {
 
 const SpeechRecognitionImpl = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 const emptySession = { conversationId: null, customer: null, activeOrder: null, intent: null, confidence: null,
-  pending: null, escalated: false, sources: [], tools: [], timings: null, provider: null };
+  pending: null, escalated: false, human: null, sources: [], tools: [], timings: null, provider: null };
 
 export default function useVoiceAgent() {
   const [state, setStateRaw] = useState('idle');
@@ -164,6 +164,13 @@ export default function useVoiceAgent() {
     if (data.degraded) flash('The AI model was unavailable, so the backup agent answered this turn.', 'warning');
   }, [flash]);
 
+  // ── Live handoff: a human support agent took over ──
+
+  const setHuman = useCallback((human, note) => {
+    setSession((s) => ({ ...s, human, pending: human ? null : s.pending }));
+    if (note) setMessages((prev) => [...prev, { id: `s-${Date.now()}`, role: 'system', content: note, at: new Date() }]);
+  }, []);
+
   const handleEvent = useCallback((msg) => {
     const { type, data = {} } = msg;
     const cur = r.current;
@@ -176,7 +183,19 @@ export default function useVoiceAgent() {
         setConnection('open');
         setCapabilities(data);
         cur.browserStt = data.stt === 'browser' && !!SpeechRecognitionImpl;
+        setSession((s) => ({ ...s, human: data.human_agent || null }));
         if (!BUSY_STATES.has(cur.state) && !cur.speaking) goListening();
+        break;
+      case 'HUMAN_JOINED':
+        setHuman({ name: data.agent_name }, `${data.agent_name} from our support team joined the call.`);
+        flash(`${data.agent_name} from support is now on the line.`);
+        break;
+      case 'HUMAN_MESSAGE':
+        setMessages((prev) => [...prev, { id: data.id, role: 'assistant', author: data.author_name, content: data.content, at: new Date() }]);
+        cur.awaitingAudio = true;
+        break;
+      case 'HUMAN_LEFT':
+        setHuman(null, `${data.agent_name} handed you back to Ava.`);
         break;
       case 'AUTH_FAILED':
         flash('Your session expired. Please sign in again.', 'danger');
@@ -252,7 +271,7 @@ export default function useVoiceAgent() {
       default:
         break;
     }
-  }, [afterSpeech, applyResult, flash, goListening, log, playAudio, setState, speakWithBrowser]);
+  }, [afterSpeech, applyResult, flash, goListening, log, playAudio, setHuman, setState, speakWithBrowser]);
 
   // ── Transport ──
 
@@ -293,6 +312,7 @@ export default function useVoiceAgent() {
       const res = await api.voiceRespond(cur.conv, payload);
       if (res.status === 'no_speech') { flash("I didn't catch that. Please try again."); goListening(); return; }
       setMessages((prev) => [...prev, { id: `u-${Date.now()}`, role: 'user', content: res.transcript, at: new Date() }]);
+      if (res.status === 'with_human') { goListening(); return; } // the human agent replies over the live socket
       applyResult(res);
       setSession((s) => ({ ...s, timings: res.timings }));
       if (res.audio_base64) playAudio(res.audio_base64, res.audio_mime);

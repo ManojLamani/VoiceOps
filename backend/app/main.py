@@ -12,8 +12,9 @@ from app.core.config import get_settings
 from app.core.logging import setup_logging, get_logger
 from app.db.database import init_db, close_db, async_session_factory
 from app.services.agent_service import ConversationNotFound, ConversationClosed
+from app.services.handoff_service import HandoffConflict
 from app.api.routes import (
-    auth, conversations, voice, customers, orders, tickets, knowledge, analytics, escalations, system,
+    auth, conversations, voice, customers, orders, tickets, knowledge, analytics, escalations, system, handoff,
 )
 
 logger = get_logger("main")
@@ -90,6 +91,10 @@ def create_app() -> FastAPI:
     async def _closed(request: Request, exc: ConversationClosed):
         return JSONResponse(status_code=409, content={"detail": "Conversation has already ended"})
 
+    @app.exception_handler(HandoffConflict)
+    async def _handoff_conflict(request: Request, exc: HandoffConflict):
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.exception_handler(IntegrityError)
     async def _conflict(request: Request, exc: IntegrityError):
         logger.warning("integrity_error", path=request.url.path, error=str(exc.orig)[:200])
@@ -103,7 +108,7 @@ def create_app() -> FastAPI:
                             content={"detail": "Database unavailable" if unavailable else "Database error"})
 
     for module in (auth, conversations, voice, customers, orders, tickets, knowledge, analytics, escalations,
-                   system):
+                   system, handoff):
         app.include_router(module.router, prefix="/api")
     return app
 

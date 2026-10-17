@@ -202,9 +202,15 @@ class Message(Base):
     rag_sources = Column(JSON)  # [{doc_id, chunk_id, score}]
     tool_calls = Column(JSON)  # [{tool_name, args, result}]
     processing_time_ms = Column(Float)
+    author_id = Column(GUID, ForeignKey("users.id"), nullable=True)  # staff member who wrote it (live handoff)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")
+    author = relationship("User")
+
+    @property
+    def author_name(self):
+        return self.author.full_name if self.author_id and self.author else None
 
     __table_args__ = (
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),

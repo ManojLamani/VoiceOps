@@ -5,7 +5,7 @@ from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import inspect
 
-from app.db.database import engine, Base, alembic_config, _upgrade
+from app.db.database import engine, Base, alembic_config, _upgrade, BASELINE_REVISION
 from app.db import models  # noqa: F401
 
 
@@ -42,6 +42,7 @@ def test_downgrade_and_upgrade_round_trip(run):
 def test_existing_create_all_database_is_adopted(run):
     """A database created by create_all before migrations existed keeps its data and is brought to head."""
     def adopt(conn):
+        command.downgrade(alembic_config(conn), BASELINE_REVISION)  # the schema create_all used to build
         users = conn.exec_driver_sql("SELECT COUNT(*) FROM users").scalar()
         conn.exec_driver_sql("DROP TABLE alembic_version")
         _upgrade(conn)

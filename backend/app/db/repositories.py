@@ -185,7 +185,7 @@ class MessageRepository:
 
     async def get_by_conversation(self, conversation_id: UUID) -> List[Message]:
         result = await self.db.execute(
-            select(Message)
+            select(Message).options(selectinload(Message.author))
             .where(Message.conversation_id == conversation_id)
             .order_by(Message.created_at)
         )
